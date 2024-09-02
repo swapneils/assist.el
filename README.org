@@ -1,0 +1,5 @@
+#+title: assist.el
+
+~assist~ is an emacs package implementing a task-automation and assistant framework for Emacs.
+
+~assist~ is primarily designed for personal use, and may become opinionated/idiosyncratic as a result.
