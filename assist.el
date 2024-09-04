@@ -235,8 +235,8 @@ to the queue (see `assist-add-quit-to-queue')"
       thread)))
 (defun assist-start-recovery-timer ()
   ;; Cancel any previous timers
-  (unless (and assist-recovery-idle-timer
-               (member assist-recovery-idle-timer timer-idle-list))
+  (when (and assist-recovery-idle-timer
+             (member assist-recovery-idle-timer timer-idle-list))
     (cancel-timer assist-recovery-idle-timer))
 
   (setq assist-recovery-idle-timer
