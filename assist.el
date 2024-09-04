@@ -163,7 +163,6 @@ Error in loop for thread %s.
 Queue: %s
 Error:
 %s
-
 "
                                (current-thread)
                                assist-event-queue
@@ -173,7 +172,6 @@ Quit affecting loop for thread %s.
 Queue: %s
 Error:
 %s
-
 "
                               (current-thread)
                               assist-event-queue
@@ -231,26 +229,35 @@ to the queue (see `assist-add-quit-to-queue')"
                    ;; Check if idle timer is active
                    (member assist-recovery-idle-timer
                            timer-idle-list))
-        (setq assist-recovery-idle-timer
-              (run-with-idle-timer assist-recovery-idle-time
-                                   t
-                                   (lambda ()
-                                     (let ((assist--internal-execution t))
-                                       (mapcar
-                                        (lambda (loop-spec)
-                                          ;; Restart the loop
-                                          (if (second loop-spec)
-                                              ;; Specify a queue if one was provided originally
-                                              (assist-event-loop
-                                               (second loop-spec))
-                                            (assist-event-loop)))
-                                        ;; Only look at improperly-closed loops
-                                        (cl-remove-if #'thread-live-p
-                                                      assist-event-loops
-                                                      :key #'first)))))))
+        (assist-start-recovery-timer))
 
       ;; Return the newly-created thread
       thread)))
+(defun assist-start-recovery-timer ()
+  ;; Cancel any previous timers
+  (unless (and assist-recovery-idle-timer
+               (member assist-recovery-idle-timer timer-idle-list))
+    (cancel-timer assist-recovery-idle-timer))
+
+  (setq assist-recovery-idle-timer
+        (run-with-idle-timer assist-recovery-idle-time
+                             ;; Keep running when reaching required idle time
+                             t
+                             (lambda ()
+                               ;; Set environment to keep event loops active
+                               (let ((assist--internal-execution t))
+                                 (mapcar
+                                  (lambda (loop-spec)
+                                    ;; Restart the loop
+                                    (if (second loop-spec)
+                                        ;; Specify a queue if one was originally provided
+                                        (assist-event-loop
+                                         (second loop-spec))
+                                      (assist-event-loop)))
+                                  ;; Only look at improperly-closed loops
+                                  (cl-remove-if #'thread-live-p
+                                                assist-event-loops
+                                                :key #'first)))))))
 
 (defun assist-add-quit-to-queue ()
   "Convenience function to push a quit task to `assist-event-queue'"
