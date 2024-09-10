@@ -129,39 +129,54 @@ This is stored as a lambda so that it can be easily overriden by users, if desir
 (defun assist--event-loop ()
   "Internal function executing an event loop in `assist.el'"
   (condition-case loop-error
-      (progn
-        (while assist--event-loop-active
-          ;; Sort the event queue
-          (setq assist-event-queue (sort assist-event-queue assist--event-sorter))
+      (let (spawned-threads)
+        (unwind-protect
+            (while assist--event-loop-active
+              ;; Sort the event queue
+              (setq assist-event-queue (sort assist-event-queue assist--event-sorter))
 
-          ;; Find active events in the queue
-          (let ((active-queue (cl-remove-if-not (lambda (event)
-                                                  ;; Check event predicate
-                                                  (funcall (assist-event-predicate event)))
-                                                assist-event-queue)))
-            ;; For each active event, run the action
-            (mapcar (lambda (active-event)
-                      (condition-case event-error
-                          (apply (assist-event-action active-event)
-                                 ;; Generate action arguments
-                                 (funcall (assist-event-action-args active-event)))
-                        (error (assist-write-error "Error executing event %s:
+              ;; Find active events in the queue
+              (let ((active-queue (cl-remove-if-not (lambda (event)
+                                                      ;; Check event predicate
+                                                      (funcall (assist-event-predicate event)))
+                                                    assist-event-queue)))
+                ;; For each active event, run the action
+                (mapcar (lambda (active-event)
+                          ;; Create a thread to run the action in
+                          (make-thread
+                           (lambda ()
+                             (let ((inhibit-quit t))
+                               (condition-case event-error
+                                   (apply (assist-event-action active-event)
+                                          ;; Generate action arguments
+                                          (funcall (assist-event-action-args active-event)))
+                                 (error (assist-write-error
+                                         "Error executing event %s:
 %s"
-                                                   active-event
-                                                   event-error))))
-                    active-queue)
+                                         active-event
+                                         event-error)))))
+                           ;; Name the thread after its action
+                           (format "%S with argforms: %S"
+                                   (assist-event-action active-event)
+                                   (assist-event-action-args active-event))))
+                        active-queue)
 
-            ;; Remove active events from the queue
-            (setq assist-event-queue
-                  (cl-remove-if (lambda (event) (member event active-queue)) assist-event-queue))
-            ;; Remove duplicate events from queue, to mitigate possible bad states
-            (setq assist-event-queue
-                  (cl-remove-duplicates assist-event-queue :test #'equal)))
+                ;; Remove active events from the queue
+                (setq assist-event-queue
+                      (cl-remove-if (lambda (event) (member event active-queue)) assist-event-queue))
+                ;; Remove duplicate events from queue, to mitigate possible bad states
+                (setq assist-event-queue
+                      (cl-remove-duplicates assist-event-queue :test #'equal)))
 
-          ;; Yield to other threads
-          (sleep-for assist-event-loop-delay))
-        ;; Remove this loop from the list of tracked event loops
-        (assist--kill-event-loop (current-thread)))
+              ;; Yield to other threads
+              (sleep-for assist-event-loop-delay))
+
+          ;; Kill any threads spawned by this one
+          (mapcar (lambda (thread)
+                    (signal thread 'error "manager process aborted"))
+                  spawned-threads)
+          ;; Remove this loop from the list of tracked event loops
+          (assist--kill-event-loop (current-thread))))
     (error (assist-write-error "
 Error in loop for thread %s.
 Queue: %s
