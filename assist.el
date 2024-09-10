@@ -292,4 +292,143 @@ Restarted loop for spec:
   (push (assist-event nil t (lambda () t) (lambda () (setq assist--event-loop-active nil)))
         assist-event-queue))
 
+(defmacro assist-define-events (event-group-name &rest chains)
+  "Defines a network of events in `assist-event-queue'.
+
+EVENT-GROUP-NAME is a symbol used to label the generated events.
+
+Each member of CHAINS is a list of forms interspersed
+with the `->' and `=>' arrows. If a form is preceded by
+`=>' it is interpreted to be an action; otherwise it
+is interpreted as a predicate.
+
+Each chain is executed in order; a predicate is only
+checked, and an action only taken, if its prior predicates
+and actions have all been fulfilled.
+
+Predicates are interpreted as the bodies of a single-form
+no-argument lambda, which will be used as the predicate
+in an `assist-event' object.
+
+Actions are interpreted as a list whose first member is
+a function and whose subsequent member are forms which
+will be used to generate the arguments of that function."
+  (cl-labels
+      ((print-equal
+        (a b)
+        (equal (format "%s" a)
+               (format "%s" b)))
+       (translate-event-chain
+        (chain event-chain-index-symbol)
+        (let (form-cache
+              event-cache
+              (form-next t)
+              (action-next-form nil))
+          (cl-loop
+           for elt in chain
+           do
+           (progn
+             ;; Is `elt' a form or an arrow?
+             (if form-next
+                 ;; Add the form to our cache of forms
+                 (push elt form-cache)
+               ;; On a => the next form is an action
+               (setq action-next-form (print-equal elt '=>)))
+
+             ;; When at an action form, make an event
+             (when (and form-next action-next-form)
+               (let ((pred-count
+                      ;; Note: incrementing this by one
+                      ;; to account for the predicate we
+                      ;; add to track the index in this chain
+                      (length form-cache))
+                     (action (car form-cache))
+                     (pred-cache (->>
+                                  ;; Sort predicates chronologically
+                                  (nreverse (cdr form-cache))
+                                  ;; Convert predicates to lambdas
+                                  (mapcar (lambda (body) (list 'lambda nil body)))
+                                  ;; Start by verifying that prior
+                                  ;; events in this chain are already
+                                  ;; completed, based on the local
+                                  ;; `event-chain-index-symbol' variable
+                                  (cons
+                                   `(lambda ()
+                                      (>= ,event-chain-index-symbol
+                                          ,(length event-cache))))))
+                     (pred-values (gensym "pred-values")))
+                 ;; Push code specifying an event object to event cache
+                 (push
+                  `(assist-event
+                    ',event-group-name 0
+                    ;; Predicate function
+                    (let ((,pred-values
+                           ;; Store a cache value for each predicate
+                           ;; to track if it's ever been fulfilled.
+                           ;; Once a predicate is fulfilled it doesn't
+                           ;; matter if it stays so, so this cache
+                           ;; will be used to track prior fulfillment.
+                           ',(cl-loop
+                              for i below pred-count
+                              collect nil)))
+                      (lambda ()
+                        ;; Update the predicate value list
+                        (cl-loop
+                         for i below (length ,pred-values)
+                         ;; Continue until we reach a predicate
+                         ;; that isn't fulfilled
+                         while (or
+                                ;; Either the predicate was
+                                ;; satisfied previously
+                                (elt ,pred-values i)
+                                ;; Or it is satisfied now
+                                (funcall (elt ',pred-cache i)))
+                         ;; Set the tracking variable for the
+                         ;; current predicate to `t'
+                         do (setf (elt ,pred-values i) t))
+                        ;; Check if every predicate has been satisfied
+                        (cl-every #'identity ,pred-values)))
+                    ;; Action function
+                    (lambda (&rest args)
+                      ;; Execute the provided action
+                      (prog1 (apply ,(car action) args)
+                        ;; Increment `event-chain-index-symbol' to track
+                        ;; how many events in this event chain
+                        ;; have been fulfilled so far
+                        (incf ,event-chain-index-symbol)))
+                    ;; Action function input forms, if any
+                    ,@(cdr action))
+                  event-cache))
+               ;; Reset form cache
+               (setq form-cache nil)
+               (message "event cache: %S" event-cache))
+
+             ;; Toggle whether the next element is a form
+             (setq form-next (not form-next))))
+          ;; Return list of event objects
+          event-cache))
+       (write-event-chain
+        (chain)
+        (let* ((event-chain-index-symbol
+                (gensym (concat
+                         "event-chain-index-symbol"
+                         "::"
+                         (format "%S" event-group-name)
+                         "-")))
+               (chain (translate-event-chain chain
+                                             event-chain-index-symbol)))
+          `(progn
+             ;; Initialize `event-chain-index-symbol' for this chain
+             (setq ,event-chain-index-symbol 0)
+             ;; Insert statements to add individual events
+             ;; to `assist-event-queue'
+             ,@(cl-loop
+                for event in chain
+                collect
+                `(push ,event assist-event-queue))))))
+    (let ((event-chains (mapcar #'write-event-chain chains)))
+      `(progn
+         ;; Insert all the event chains
+         ,@event-chains))))
+
 (provide 'assist)
