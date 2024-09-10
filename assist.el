@@ -9,6 +9,8 @@
 ;;                                    org-directory)
 ;;                                  "/assistant"))
 
+(require 'dash)
+
 (defvar assist--internal-execution nil
   "Tracks when assist functions are being called by other
 assist functions.")
@@ -91,11 +93,13 @@ quit improperly (e.g. via C-g)")
 This is stored as a lambda so that it can be easily overriden by users, if desired.")
 
 (defun assist-write-error (str &rest data)
-  (with-current-buffer (get-buffer-create "*assist-error-buffer*")
-    (emacs-lock-mode 'kill)
-    (end-of-buffer)
-    (insert (apply #'format str data))
-    (newline)))
+  (let ((msg (apply #'format str data)))
+    (with-current-buffer (get-buffer-create "*assist-error-buffer*")
+      (emacs-lock-mode 'kill)
+      (end-of-buffer)
+      (insert msg)
+      (newline))
+    (message msg)))
 
 (defun assist-match-event (queue template-event slot-list)
   "Find all events in QUEUE that match TEMPLATE-EVENT for the slots in SLOT-LIST."
@@ -255,7 +259,13 @@ to the queue (see `assist-add-quit-to-queue')"
                                         ;; Specify a queue if one was originally provided
                                         (assist-event-loop
                                          (second loop-spec))
-                                      (assist-event-loop)))
+                                      (assist-event-loop))
+                                    (assist-write-error "
+
+Restarted loop for spec:
+%s
+"
+                                                        loop-spec))
                                   ;; Only look at improperly-closed loops
                                   (cl-remove-if #'thread-live-p
                                                 assist-event-loops
