@@ -195,7 +195,8 @@ to the queue (see `assist-add-quit-to-queue')"
                             ;; of the global queue, and add a quit
                             ;; task for when it is emptied.
                             (lambda ()
-                              (let ((assist--event-loop-active t)
+                              (let ((inhibit-quit t)
+                                    (assist--event-loop-active t)
                                     (assist-event-queue queue))
                                 ;; Push quit task to queue
                                 (push
@@ -213,7 +214,8 @@ to the queue (see `assist-add-quit-to-queue')"
                                 (assist--event-loop)))
                           ;; Otherwise use the global queue
                           (lambda ()
-                            (let ((assist--event-loop-active t))
+                            (let ((inhibit-quit t)
+                                  (assist--event-loop-active t))
                               (assist--event-loop)))))
            (thread (make-thread thread-func)))
       ;; Clear out dead threads from the loop tracking list
