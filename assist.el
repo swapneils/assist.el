@@ -56,14 +56,14 @@ calling ACTION_.
 For instance, (assist-event nil nil pred action (current-time)) will call
 `action' with the time at which it was called, not the time at which the
 event was created."
-  (concatenate 'list
-               `(assist--make-event
-                 :predicate ,predicate
-                 :action ,action
-                 :action-args (lambda () (list ,@action-args))
-                 :action-literal-args ',action-args)
-               (when group `(:group ,group))
-               (when priority `(:priority ,priority))))
+  (cl-concatenate 'list
+                  `(assist--make-event
+                    :predicate ,predicate
+                    :action ,action
+                    :action-args (lambda () (list ,@action-args))
+                    :action-literal-args ',action-args)
+                  (when group `(:group ,group))
+                  (when priority `(:priority ,priority))))
 
 (defvar assist-event-queue nil
   "An environment variable tracking the event queue for assist.
@@ -75,6 +75,8 @@ May or may not include inactive threads.")
   "An internal variable used to determine whether to quit an event loop")
 (defvar assist-event-loop-delay 2
   "The delay in seconds between executions of an event loop thread.")
+(defvar assist-memory nil
+  "A global variable storing memory information for assist.")
 
 (defvar assist-recovery-idle-timer nil
   "The timer used to recover assist-event-loop threads which have been
@@ -131,52 +133,53 @@ This is stored as a lambda so that it can be easily overriden by users, if desir
   (condition-case loop-error
       (let (spawned-threads)
         (unwind-protect
-            (while assist--event-loop-active
-              ;; Sort the event queue
-              (setq assist-event-queue (sort assist-event-queue assist--event-sorter))
+            (progn
+              (while assist--event-loop-active
+                ;; Sort the event queue
+                (setq assist-event-queue (sort assist-event-queue assist--event-sorter))
 
-              ;; Find active events in the queue
-              (let ((active-queue (cl-remove-if-not (lambda (event)
-                                                      ;; Check event predicate
-                                                      (funcall (assist-event-predicate event)))
-                                                    assist-event-queue)))
-                ;; For each active event, run the action
-                (mapcar (lambda (active-event)
-                          ;; Create a thread to run the action in
-                          (make-thread
-                           (lambda ()
-                             (let ((inhibit-quit t))
-                               (condition-case event-error
-                                   (apply (assist-event-action active-event)
-                                          ;; Generate action arguments
-                                          (funcall (assist-event-action-args active-event)))
-                                 (error (assist-write-error
-                                         "Error executing event %s:
+                ;; Find active events in the queue
+                (let ((active-queue (cl-remove-if-not (lambda (event)
+                                                        ;; Check event predicate
+                                                        (funcall (assist-event-predicate event)))
+                                                      assist-event-queue)))
+                  ;; For each active event, run the action
+                  (mapcar (lambda (active-event)
+                            ;; Create a thread to run the action in
+                            (make-thread
+                             (lambda ()
+                               (let ((inhibit-quit t))
+                                 (condition-case event-error
+                                     (apply (assist-event-action active-event)
+                                            ;; Generate action arguments
+                                            (funcall (assist-event-action-args active-event)))
+                                   (error (assist-write-error
+                                           "Error executing event %s:
 %s"
-                                         active-event
-                                         event-error)))))
-                           ;; Name the thread after its action
-                           (format "%S with argforms: %S"
-                                   (assist-event-action active-event)
-                                   (assist-event-action-args active-event))))
-                        active-queue)
+                                           active-event
+                                           event-error)))))
+                             ;; Name the thread after its action
+                             (format "%S with argforms: %S"
+                                     (assist-event-action active-event)
+                                     (assist-event-action-args active-event))))
+                          active-queue)
 
-                ;; Remove active events from the queue
-                (setq assist-event-queue
-                      (cl-remove-if (lambda (event) (member event active-queue)) assist-event-queue))
-                ;; Remove duplicate events from queue, to mitigate possible bad states
-                (setq assist-event-queue
-                      (cl-remove-duplicates assist-event-queue :test #'equal)))
+                  ;; Remove active events from the queue
+                  (setq assist-event-queue
+                        (cl-remove-if (lambda (event) (member event active-queue)) assist-event-queue))
+                  ;; Remove duplicate events from queue, to mitigate possible bad states
+                  (setq assist-event-queue
+                        (cl-remove-duplicates assist-event-queue :test #'equal)))
 
-              ;; Yield to other threads
-              (sleep-for assist-event-loop-delay))
+                ;; Yield to other threads
+                (sleep-for assist-event-loop-delay))
+              ;; Remove this loop from the list of tracked event loops
+              (assist--kill-event-loop (current-thread)))
 
           ;; Kill any threads spawned by this one
           (mapcar (lambda (thread)
                     (signal thread 'error "manager process aborted"))
-                  spawned-threads)
-          ;; Remove this loop from the list of tracked event loops
-          (assist--kill-event-loop (current-thread))))
+                  spawned-threads)))
     (error (assist-write-error "
 Error in loop for thread %s.
 Queue: %s
@@ -204,10 +207,18 @@ If not provided, the global variable `assist-event-queue' will be used,
 and the thread will have to be manually exited by pushing a quit action
 to the queue (see `assist-add-quit-to-queue')"
   (interactive)
+
+  ;; Ensure that the recovery idle timer is running
+  (unless (and assist-recovery-idle-timer
+               ;; Check if idle timer is active
+               (member assist-recovery-idle-timer
+                       timer-idle-list))
+    (assist-start-recovery-timer))
+
   (if (and (not assist--internal-execution)
            ;; Check if the specified queue is already being tracked
-           (some (lambda (loop-spec) (member queue loop-spec))
-                 assist-event-loops))
+           (cl-some (lambda (loop-spec) (member queue loop-spec))
+                    assist-event-loops))
       (warn "Loop already exists for queue %s, aborting loop creation" queue)
     (let* ((thread-func (if queue
                             ;; If queue is provided, use it instead
@@ -244,13 +255,6 @@ to the queue (see `assist-add-quit-to-queue')"
       ;; Push the new thread to the loop tracking list
       ;; Note that the second value is `nil' iff `queue' is not provided
       (push (list thread queue) assist-event-loops)
-
-      ;; Ensure that the recovery idle timer is running
-      (unless (and assist-recovery-idle-timer
-                   ;; Check if idle timer is active
-                   (member assist-recovery-idle-timer
-                           timer-idle-list))
-        (assist-start-recovery-timer))
 
       ;; Return the newly-created thread
       thread)))
@@ -382,7 +386,7 @@ will be used to generate the arguments of that function."
                                 ;; satisfied previously
                                 (elt ,pred-values i)
                                 ;; Or it is satisfied now
-                                (funcall (elt ',pred-cache i)))
+                                (funcall (elt (list ,@pred-cache) i)))
                          ;; Set the tracking variable for the
                          ;; current predicate to `t'
                          do (setf (elt ,pred-values i) t))
@@ -395,7 +399,7 @@ will be used to generate the arguments of that function."
                         ;; Increment `event-chain-index-symbol' to track
                         ;; how many events in this event chain
                         ;; have been fulfilled so far
-                        (incf ,event-chain-index-symbol)))
+                        (cl-incf ,event-chain-index-symbol)))
                     ;; Action function input forms, if any
                     ,@(cdr action))
                   event-cache))
@@ -411,8 +415,7 @@ will be used to generate the arguments of that function."
         (chain)
         (let* ((event-chain-index-symbol
                 (gensym (concat
-                         "event-chain-index-symbol"
-                         "::"
+                         "event-chain-index-symbol" "::"
                          (format "%S" event-group-name)
                          "-")))
                (chain (translate-event-chain chain
