@@ -15,6 +15,7 @@
   "Tracks when assist functions are being called by other
 assist functions.")
 
+(require 'cl-lib)
 
 ;;; Event tracking
 (cl-defstruct (assist-event
@@ -251,7 +252,7 @@ to the queue (see `assist-add-quit-to-queue')"
       ;; Clear out dead threads from the loop tracking list
       (setq assist-event-loops (cl-remove-if-not
                                 #'thread-live-p assist-event-loops
-                                :key #'first))
+                                :key #'cl-first))
       ;; Push the new thread to the loop tracking list
       ;; Note that the second value is `nil' iff `queue' is not provided
       (push (list thread queue) assist-event-loops)
@@ -288,7 +289,7 @@ Restarted loop for spec:
                                   ;; Only look at improperly-closed loops
                                   (cl-remove-if #'thread-live-p
                                                 assist-event-loops
-                                                :key #'first)))))))
+                                                :key #'cl-first)))))))
 
 (defun assist-add-quit-to-queue ()
   "Convenience function to push a quit task to `assist-event-queue'"
