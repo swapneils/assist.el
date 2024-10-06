@@ -145,25 +145,28 @@ This is stored as a lambda so that it can be easily overriden by users, if desir
                                                         (funcall (assist-event-predicate event)))
                                                       assist-event-queue)))
                   ;; For each active event, run the action
-                  (mapcar (lambda (active-event)
-                            ;; Create a thread to run the action in
-                            (make-thread
-                             (lambda ()
-                               (let ((inhibit-quit t))
-                                 (condition-case event-error
-                                     (apply (assist-event-action active-event)
-                                            ;; Generate action arguments
-                                            (funcall (assist-event-action-args active-event)))
-                                   (error (assist-write-error
-                                           "Error executing event %s:
+                  (cl-mapcar (lambda (active-event)
+                               (push
+                                ;; Create a thread to run the action in
+                                (make-thread
+                                 (lambda ()
+                                   (let ((inhibit-quit t))
+                                     (condition-case event-error
+                                         (apply (assist-event-action active-event)
+                                                ;; Generate action arguments
+                                                (funcall (assist-event-action-args active-event)))
+                                       (error (assist-write-error
+                                               "Error executing event %s:
 %s"
-                                           active-event
-                                           event-error)))))
-                             ;; Name the thread after its action
-                             (format "%S with argforms: %S"
-                                     (assist-event-action active-event)
-                                     (assist-event-action-args active-event))))
-                          active-queue)
+                                               active-event
+                                               event-error)))))
+                                 ;; Name the thread after its action
+                                 (format "%S with argforms: %S"
+                                         (assist-event-action active-event)
+                                         (assist-event-action-args active-event)))
+                                ;; Add the new thread to the spawned thread list
+                                spawned-threads))
+                             active-queue)
 
                   ;; Remove active events from the queue
                   (setq assist-event-queue
@@ -177,9 +180,10 @@ This is stored as a lambda so that it can be easily overriden by users, if desir
               ;; Remove this loop from the list of tracked event loops
               (assist--kill-event-loop (current-thread)))
 
-          ;; Kill any threads spawned by this one
+          ;; Kill any still-running threads spawned by this one
           (mapcar (lambda (thread)
-                    (signal thread 'error "manager process aborted"))
+                    (when (thread-live-p thread)
+                        (signal thread 'error "manager process aborted")))
                   spawned-threads)))
     (error (assist-write-error "
 Error in loop for thread %s.
@@ -191,7 +195,7 @@ Error:
                                assist-event-queue
                                loop-error))
     (quit (assist-write-error "
-Quit affecting loop for thread %s.
+Quit interrupted loop for thread %s.
 Queue: %s
 Error:
 %s
